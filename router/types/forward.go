@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	host "github.com/cosmos/ibc-go/v4/modules/core/24-host"
 	"github.com/iancoleman/orderedmap"
+
+	host "github.com/cosmos/ibc-go/v4/modules/core/24-host"
 )
 
 type PacketMetadata struct {
@@ -30,13 +31,13 @@ type Duration time.Duration
 
 func (m *ForwardMetadata) Validate() error {
 	if m.Receiver == "" {
-		return fmt.Errorf("failed to validate forward metadata. receiver cannot be empty")
+		return fmt.Errorf("failed to validate metadata. receiver cannot be empty")
 	}
 	if err := host.PortIdentifierValidator(m.Port); err != nil {
-		return fmt.Errorf("failed to validate forward metadata: %w", err)
+		return fmt.Errorf("failed to validate metadata: %w", err)
 	}
 	if err := host.ChannelIdentifierValidator(m.Channel); err != nil {
-		return fmt.Errorf("failed to validate forward metadata: %w", err)
+		return fmt.Errorf("failed to validate metadata: %w", err)
 	}
 
 	return nil

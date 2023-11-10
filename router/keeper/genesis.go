@@ -1,8 +1,9 @@
 package keeper
 
 import (
+	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v4/router/types"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/strangelove-ventures/packet-forward-middleware/v4/router/types"
 )
 
 // InitGenesis

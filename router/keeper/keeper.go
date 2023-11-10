@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/armon/go-metrics"
+	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v4/router/types"
+	"github.com/tendermint/tendermint/libs/log"
+
 	"github.com/cosmos/cosmos-sdk/codec"
 	storetypes "github.com/cosmos/cosmos-sdk/store/types"
 	"github.com/cosmos/cosmos-sdk/telemetry"
@@ -14,6 +17,7 @@ import (
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	capabilitytypes "github.com/cosmos/cosmos-sdk/x/capability/types"
 	paramtypes "github.com/cosmos/cosmos-sdk/x/params/types"
+
 	transfertypes "github.com/cosmos/ibc-go/v4/modules/apps/transfer/types"
 	clienttypes "github.com/cosmos/ibc-go/v4/modules/core/02-client/types"
 	channeltypes "github.com/cosmos/ibc-go/v4/modules/core/04-channel/types"
@@ -21,8 +25,6 @@ import (
 	host "github.com/cosmos/ibc-go/v4/modules/core/24-host"
 	ibcexported "github.com/cosmos/ibc-go/v4/modules/core/exported"
 	coretypes "github.com/cosmos/ibc-go/v4/modules/core/types"
-	"github.com/strangelove-ventures/packet-forward-middleware/v4/router/types"
-	"github.com/tendermint/tendermint/libs/log"
 )
 
 var (
@@ -364,6 +366,7 @@ func (k *Keeper) RetryTimeout(
 	}
 
 	if data.Memo != "" {
+		metadata.Next = &types.JSONObject{}
 		if err := json.Unmarshal([]byte(data.Memo), metadata.Next); err != nil {
 			return fmt.Errorf("error unmarshaling memo json: %w", err)
 		}
