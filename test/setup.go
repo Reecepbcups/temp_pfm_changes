@@ -4,12 +4,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v7/packetforward"
-	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v7/packetforward/keeper"
-	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v7/packetforward/types"
-	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v7/test/mock"
+	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v4/router"
+	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v4/router/keeper"
+	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v4/router/types"
+	"github.com/cosmos/ibc-apps/middleware/packet-forward-middleware/v4/test/mock"
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
+	"github.com/tendermint/tendermint/libs/log"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+	tmdb "github.com/tendermint/tm-db"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	cdctypes "github.com/cosmos/cosmos-sdk/codec/types"
@@ -19,15 +22,12 @@ import (
 	paramskeeper "github.com/cosmos/cosmos-sdk/x/params/keeper"
 	paramstypes "github.com/cosmos/cosmos-sdk/x/params/types"
 
-	tmdb "github.com/cometbft/cometbft-db"
-	"github.com/cometbft/cometbft/libs/log"
-	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
-
-	porttypes "github.com/cosmos/ibc-go/v7/modules/core/05-port/types"
+	porttypes "github.com/cosmos/ibc-go/v4/modules/core/05-port/types"
 )
 
 func NewTestSetup(t *testing.T, ctl *gomock.Controller) *Setup {
 	t.Helper()
+
 	initializer := newInitializer()
 
 	transferKeeperMock := mock.NewMockTransferKeeper(ctl)
@@ -38,30 +38,29 @@ func NewTestSetup(t *testing.T, ctl *gomock.Controller) *Setup {
 	ics4WrapperMock := mock.NewMockICS4Wrapper(ctl)
 
 	paramsKeeper := initializer.paramsKeeper()
-	packetforwardKeeper := initializer.packetforwardKeeper(paramsKeeper, transferKeeperMock, channelKeeperMock, distributionKeeperMock, bankKeeperMock, ics4WrapperMock)
+	routerKeeper := initializer.routerKeeper(paramsKeeper, transferKeeperMock, channelKeeperMock, distributionKeeperMock, bankKeeperMock, ics4WrapperMock)
 
 	require.NoError(t, initializer.StateStore.LoadLatestVersion())
 
-	if err := packetforwardKeeper.SetParams(initializer.Ctx, types.DefaultParams()); err != nil {
-		t.Fatal(err)
-	}
+	routerKeeper.SetParams(initializer.Ctx, types.DefaultParams())
 
 	return &Setup{
 		Initializer: initializer,
 
 		Keepers: &testKeepers{
-			ParamsKeeper:        &paramsKeeper,
-			PacketForwardKeeper: packetforwardKeeper,
+			ParamsKeeper: &paramsKeeper,
+			RouterKeeper: routerKeeper,
 		},
 
 		Mocks: &testMocks{
 			TransferKeeperMock:     transferKeeperMock,
+			ChannelKeeperMock:      channelKeeperMock,
 			DistributionKeeperMock: distributionKeeperMock,
 			IBCModuleMock:          ibcModuleMock,
 			ICS4WrapperMock:        ics4WrapperMock,
 		},
 
-		ForwardMiddleware: initializer.forwardMiddleware(ibcModuleMock, packetforwardKeeper, 0, keeper.DefaultForwardTransferPacketTimeoutTimestamp, keeper.DefaultRefundTransferPacketTimeoutTimestamp),
+		ForwardMiddleware: initializer.forwardMiddleware(ibcModuleMock, routerKeeper, 0, keeper.DefaultForwardTransferPacketTimeoutTimestamp, keeper.DefaultRefundTransferPacketTimeoutTimestamp),
 	}
 }
 
@@ -71,16 +70,17 @@ type Setup struct {
 	Keepers *testKeepers
 	Mocks   *testMocks
 
-	ForwardMiddleware packetforward.IBCMiddleware
+	ForwardMiddleware router.IBCMiddleware
 }
 
 type testKeepers struct {
-	ParamsKeeper        *paramskeeper.Keeper
-	PacketForwardKeeper *keeper.Keeper
+	ParamsKeeper *paramskeeper.Keeper
+	RouterKeeper *keeper.Keeper
 }
 
 type testMocks struct {
 	TransferKeeperMock     *mock.MockTransferKeeper
+	ChannelKeeperMock      *mock.MockChannelKeeper
 	DistributionKeeperMock *mock.MockDistributionKeeper
 	IBCModuleMock          *mock.MockIBCModule
 	ICS4WrapperMock        *mock.MockICS4Wrapper
@@ -127,7 +127,7 @@ func (i initializer) paramsKeeper() paramskeeper.Keeper {
 	return paramsKeeper
 }
 
-func (i initializer) packetforwardKeeper(
+func (i initializer) routerKeeper(
 	paramsKeeper paramskeeper.Keeper,
 	transferKeeper types.TransferKeeper,
 	channelKeeper types.ChannelKeeper,
@@ -138,22 +138,21 @@ func (i initializer) packetforwardKeeper(
 	storeKey := sdk.NewKVStoreKey(types.StoreKey)
 	i.StateStore.MountStoreWithDB(storeKey, storetypes.StoreTypeIAVL, i.DB)
 
-	govModuleAddress := "cosmos10d07y265gmmuvt4z0w9aw880jnsr700j6zn9kn"
-
-	packetforwardKeeper := keeper.NewKeeper(
+	subspace := paramsKeeper.Subspace(types.ModuleName)
+	routerKeeper := keeper.NewKeeper(
 		i.Marshaler,
 		storeKey,
+		subspace,
 		transferKeeper,
 		channelKeeper,
 		distributionKeeper,
 		bankKeeper,
 		ics4Wrapper,
-		govModuleAddress,
 	)
 
-	return packetforwardKeeper
+	return routerKeeper
 }
 
-func (i initializer) forwardMiddleware(app porttypes.IBCModule, k *keeper.Keeper, retriesOnTimeout uint8, forwardTimeout time.Duration, refundTimeout time.Duration) packetforward.IBCMiddleware {
-	return packetforward.NewIBCMiddleware(app, k, retriesOnTimeout, forwardTimeout, refundTimeout)
+func (i initializer) forwardMiddleware(app porttypes.IBCModule, k *keeper.Keeper, retriesOnTimeout uint8, forwardTimeout time.Duration, refundTimeout time.Duration) router.IBCMiddleware {
+	return router.NewIBCMiddleware(app, k, retriesOnTimeout, forwardTimeout, refundTimeout)
 }

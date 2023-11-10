@@ -105,7 +105,7 @@ BUILD_TARGETS := build install
 
 build: BUILD_ARGS=-o $(BUILDDIR)/
 build-linux:
-	GOOS=linux GOARCH=amd64 LEDGER_ENABLED=false $(MAKE) build -o bin/simd ./cmd/simd
+	GOOS=linux GOARCH=amd64 LEDGER_ENABLED=false $(MAKE) build
 
 $(BUILD_TARGETS): go.sum $(BUILDDIR)/
 	go $@ -mod=readonly $(BUILD_FLAGS) $(BUILD_ARGS) ./...
@@ -142,13 +142,12 @@ cosmovisor:
 .PHONY: build build-linux build-simd-all build-simd-linux cosmovisor
 
 mocks: $(MOCKS_DIR)
-	go install go.uber.org/mock/mockgen@v0.2.0
-	mockgen -package=mock -destination=./test/mock/transfer_keeper.go $(GOMOD)/packetforward/types TransferKeeper
-	mockgen -package=mock -destination=./test/mock/distribution_keeper.go $(GOMOD)/packetforward/types DistributionKeeper
-	mockgen -package=mock -destination=./test/mock/bank_keeper.go $(GOMOD)/packetforward/types BankKeeper
-	mockgen -package=mock -destination=./test/mock/channel_keeper.go $(GOMOD)/packetforward/types ChannelKeeper
-	mockgen -package=mock -destination=./test/mock/ics4_wrapper.go github.com/cosmos/ibc-go/v7/modules/core/05-port/types ICS4Wrapper
-	mockgen -package=mock -destination=./test/mock/ibc_module.go github.com/cosmos/ibc-go/v7/modules/core/05-port/types IBCModule
+	mockgen -package=mock -destination=./test/mock/transfer_keeper.go $(GOMOD)/router/types TransferKeeper
+	mockgen -package=mock -destination=./test/mock/channel_keeper.go $(GOMOD)/router/types ChannelKeeper
+	mockgen -package=mock -destination=./test/mock/distribution_keeper.go $(GOMOD)/router/types DistributionKeeper
+	mockgen -package=mock -destination=./test/mock/bank_keeper.go $(GOMOD)/router/types BankKeeper
+	mockgen -package=mock -destination=./test/mock/ics4_wrapper.go github.com/cosmos/ibc-go/v4/modules/core/05-port/types ICS4Wrapper
+	mockgen -package=mock -destination=./test/mock/ibc_module.go github.com/cosmos/ibc-go/v4/modules/core/05-port/types IBCModule
 
 .PHONY: mocks
 
@@ -212,22 +211,6 @@ endif
 .PHONY: run-tests test test-all $(TEST_TARGETS)
 
 ###############################################################################
-###                             e2e interchain test                         ###
-###############################################################################
-
-local-image:
-	docker build . -t pfm:local
-
-ictest-forward:
-	cd e2e && go test -race -v -timeout 15m -run TestPacketForwardMiddleware .
-
-ictest-timeout:
-	cd e2e && go test -race -v -timeout 15m -run TestTimeoutOnForward .
-
-ictest-upgrade:
-	cd e2e && go test -race -v -timeout 15m -run TestPFMUpgrade .
-
-###############################################################################
 ###                                Linting                                  ###
 ###############################################################################
 
@@ -254,26 +237,25 @@ containerProtoGen=cosmos-sdk-proto-gen-$(containerProtoVer)
 containerProtoGenSwagger=cosmos-sdk-proto-gen-swagger-$(containerProtoVer)
 containerProtoFmt=cosmos-sdk-proto-fmt-$(containerProtoVer)
 
-protoVer=0.13.1
-protoImageName=ghcr.io/cosmos/proto-builder:$(protoVer)
-protoImage=$(DOCKER) run --rm -v $(CURDIR):/workspace --workdir /workspace $(protoImageName)
-
 proto-all: proto-format proto-lint proto-gen
 
 proto-gen:
 	@echo "Generating Protobuf files"
-	@$(protoImage) sh ./scripts/protocgen.sh
+	@if docker ps -a --format '{{.Names}}' | grep -Eq "^${containerProtoGen}$$"; then docker start -a $(containerProtoGen); else docker run --name $(containerProtoGen) -v $(CURDIR):/workspace --workdir /workspace $(containerProtoImage) \
+		sh ./scripts/protocgen.sh; fi
 
 proto-format:
-	@$(protoImage) find ./ -name "*.proto" -exec clang-format -i {} \;
-
-proto-lint:
-	@$(protoImage) buf lint --error-format=json
+	@echo "Formatting Protobuf files"
+	@if docker ps -a --format '{{.Names}}' | grep -Eq "^${containerProtoFmt}$$"; then docker start -a $(containerProtoFmt); else docker run --name $(containerProtoFmt) -v $(CURDIR):/workspace --workdir /workspace tendermintdev/docker-build-proto \
+		find ./ -not -path "./third_party/*" -name "*.proto" -exec clang-format -i {} \; ; fi
 
 proto-swagger-gen:
 	@echo "Generating Protobuf Swagger"
 	@if docker ps -a --format '{{.Names}}' | grep -Eq "^${containerProtoGenSwagger}$$"; then docker start -a $(containerProtoGenSwagger); else docker run --name $(containerProtoGenSwagger) -v $(CURDIR):/workspace --workdir /workspace $(containerProtoImage) \
 		sh ./scripts/protoc-swagger-gen.sh; fi
+
+proto-lint:
+	@$(DOCKER_BUF) lint --error-format=json
 
 proto-check-breaking:
 	@$(DOCKER_BUF) breaking --against $(HTTPS_GIT)#branch=main
